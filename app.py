@@ -8,7 +8,8 @@ from typing import Dict
 class HuggingFaceChallengeGenerator:
     def __init__(self):
         # Create a pipeline for text generation using a pre-trained language model from Hugging Face
-        self.generator = pipeline("text-generation", model="gpt2")  # You can replace "gpt2" with any other model
+        self.generator = pipeline("text-generation", model="distilgpt2")  # or "EleutherAI/gpt-neo-2.7B"
+
 
     def generate_challenge(self, difficulty: str = "medium") -> Dict:
         prompt = f"""Generate a {difficulty} Python coding challenge in JSON format. 
