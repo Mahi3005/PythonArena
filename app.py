@@ -1,34 +1,50 @@
 import streamlit as st
-import openai
+from transformers import pipeline  # Import pipeline from transformers
+import os
+import json
 from typing import Dict
-import time
 
 
-class OpenAIChallengeGenerator:
-    def __init__(self, api_key: str):
-        openai.api_key = api_key
+class HuggingFaceChallengeGenerator:
+    def __init__(self):
+        # Create a pipeline for text generation using a pre-trained language model from Hugging Face
+        self.generator = pipeline("text-generation", model="gpt2")  # You can replace "gpt2" with any other model
 
     def generate_challenge(self, difficulty: str = "medium") -> Dict:
-        prompt = f"""Generate a {difficulty} Python coding challenge. 
-        Include:
-        1. A problem description
-        2. Function signature (name and parameters)
-        3. 3 test cases with inputs and expected outputs
-        Format the response as a Python dictionary."""
+        prompt = f"""Generate a {difficulty} Python coding challenge in JSON format. 
+        The JSON object should contain the following keys:
+        - 'description': A string describing the challenge
+        - 'function_signature': The function name and parameters
+        - 'test_cases': A list of dictionaries, each containing:
+          - 'inputs': The inputs for the test case
+          - 'expected_output': The expected output for the test case
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a Python expert creating coding challenges."},
-                {"role": "user", "content": prompt}
-            ]
-        )
+        Format your response as a JSON object, without additional text."""
 
-        # Parse the response and structure it as needed
-        challenge_dict = eval(response.choices[0].message.content)
-        return challenge_dict
+        # Generate the challenge using the Hugging Face model
+        try:
+            result = self.generator(prompt, max_length=300, num_return_sequences=1)
+            raw_text = result[0]['generated_text']
+            st.write("Generated Text:", raw_text)  # Display the generated text on Streamlit for debugging
+
+            # Validate if the generated text starts and ends with curly braces (indicating a JSON object)
+            if not (raw_text.startswith("{") and raw_text.endswith("}")):
+                st.error("Generated text is not a valid JSON object. Please check the model's output.")
+                return None
+
+            # Try to parse the generated text as JSON
+            challenge_dict = json.loads(raw_text)
+            return challenge_dict
+
+        except json.JSONDecodeError as json_err:
+            st.error(f"JSON parsing error: {str(json_err)}. The generated text might not be in the correct format.")
+        except Exception as e:
+            st.error(f"Error generating challenge: {str(e)}")
+
+        return None
 
     def evaluate_solution(self, challenge: Dict, user_code: str) -> Dict:
+        # Since Hugging Face models can't evaluate code directly, let's create a prompt for it
         prompt = f"""Evaluate this Python code for the following challenge:
         Challenge: {challenge['description']}
         User's code:
@@ -41,51 +57,62 @@ class OpenAIChallengeGenerator:
         'failed_tests' (list of test case indices that failed),
         'feedback' (string with overall feedback and suggestions for improvement)."""
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a Python expert evaluating code submissions."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        # Parse the response and structure it as needed
-        evaluation_results = eval(response.choices[0].message.content)
-        return evaluation_results
+        # Generate feedback using the Hugging Face model
+        try:
+            result = self.generator(prompt, max_length=300, num_return_sequences=1)
+            evaluation_results = json.loads(result[0]['generated_text'])
+            return evaluation_results
+        except Exception as e:
+            st.error(f"Error evaluating solution: {str(e)}")
+            return None
 
 
-# Custom CSS to enhance the design
 def local_css(file_name):
     with open(file_name, "r") as f:
         st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
 
+def display_leaderboard():
+    st.subheader("Leaderboard")
+    if 'leaderboard' not in st.session_state:
+        st.session_state.leaderboard = []
+
+    for i, entry in enumerate(st.session_state.leaderboard):
+        st.write(f"{i + 1}. {entry['name']} - {entry['score']} points")
+
+
+def update_leaderboard(name, score):
+    if 'leaderboard' not in st.session_state:
+        st.session_state.leaderboard = []
+
+    st.session_state.leaderboard.append({'name': name, 'score': score})
+    st.session_state.leaderboard.sort(key=lambda x: x['score'], reverse=True)
+    st.session_state.leaderboard = st.session_state.leaderboard[:10]  # Keep top 10
+
+
 def main():
     st.set_page_config(page_title="PythonDuel: AI vs Human", layout="wide")
-    local_css("style.css")  # Make sure to create this CSS file
+    local_css("style.css")
 
     st.title("🐍 PythonDuel: Challenge the AI")
     st.markdown("### Test your Python skills against our AI opponent!")
 
-    # Initialize session state
     if 'challenge' not in st.session_state:
         st.session_state.challenge = None
     if 'evaluation' not in st.session_state:
         st.session_state.evaluation = None
 
-    # Sidebar for API key and difficulty selection
     with st.sidebar:
         st.header("Settings")
-        api_key = st.text_input("Enter your OpenAI API Key", type="password")
         difficulty = st.select_slider("Select Difficulty", options=["easy", "medium", "hard"])
+        user_name = st.text_input("Your Name", value="Anonymous")
 
         if st.button("Generate New Challenge"):
             with st.spinner("Generating challenge..."):
-                generator = OpenAIChallengeGenerator(api_key)
+                generator = HuggingFaceChallengeGenerator()
                 st.session_state.challenge = generator.generate_challenge(difficulty)
-                st.session_state.evaluation = None  # Reset evaluation
+                st.session_state.evaluation = None
 
-    # Main content area
     col1, col2 = st.columns([3, 2])
 
     with col1:
@@ -102,8 +129,11 @@ def main():
                     st.error("Please enter your code before submitting.")
                 else:
                     with st.spinner("Evaluating your solution..."):
-                        generator = OpenAIChallengeGenerator(api_key)
+                        generator = HuggingFaceChallengeGenerator()
                         st.session_state.evaluation = generator.evaluate_solution(st.session_state.challenge, user_code)
+                        if st.session_state.evaluation:
+                            score = len(st.session_state.evaluation['passed_tests']) * 10
+                            update_leaderboard(user_name, score)
         else:
             st.info("Generate a new challenge to start coding!")
 
@@ -122,7 +152,8 @@ def main():
             st.markdown("**Feedback:**")
             st.write(st.session_state.evaluation['feedback'])
 
-    # Footer
+        display_leaderboard()
+
     st.markdown("---")
     st.markdown(
         "Created with ❤️ by Your Team | [GitHub](https://github.com/your-repo) | [About Us](https://your-website.com)")
